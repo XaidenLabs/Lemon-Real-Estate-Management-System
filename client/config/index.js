@@ -1,6 +1,6 @@
 export const config = {
   // Using local network IP to ensure access from Emulator and Physical Devices
-  API_BASE_URL: "https://1e8175f1e695.ngrok-free.app",
+  API_BASE_URL: "https://lemonz-backend.vercel.app",
 };
 
 console.log("Configured API URL:", config.API_BASE_URL);

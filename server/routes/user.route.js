@@ -11,7 +11,10 @@ const {
 } = require("../controllers/user.controller");
 const { authenticate } = require("../middlewares/authenticate");
 const { upload } = require("../middlewares/image-upload");
-const { getBanks: getBanksCtrl } = require("../controllers/payout.controller");
+const {
+  getBanks: getBanksCtrl,
+  resolveAccount: resolveAccountCtrl,
+} = require("../controllers/payout.controller");
 
 const router = require("express").Router();
 
@@ -22,13 +25,14 @@ router.post("/forgot-password", forgotPassword);
 router.post("/verify-otp", verifyOtp);
 router.post("/reset-password", resetPassword);
 router.get("/banks", getBanksCtrl);
+router.get("/resolve-account", resolveAccountCtrl);
 router.put("/update", authenticate, updateUser);
 router.get("/", authenticate, getUser);
 router.post(
   "/id/verify",
   authenticate,
   upload.single("idImage"),
-  idVerification,
+  idVerification
 );
 
 module.exports = router;

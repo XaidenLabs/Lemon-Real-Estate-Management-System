@@ -1,10 +1,59 @@
 import { useEffect, useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, Alert } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+} from "react-native";
 import { Picker } from "@react-native-picker/picker";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchCountries } from "../../services/countryApi";
 import { useAuth } from "../../contexts/AuthContext";
 import { config } from "../../config";
+
+const InputField = ({
+  icon,
+  placeholder,
+  value,
+  onChangeText,
+  secureTextEntry,
+  keyboardType,
+  autoCapitalize,
+  editable = true,
+}) => {
+  const [isFocused, setIsFocused] = useState(false);
+
+  return (
+    <View className="mb-4">
+      <View
+        className={`flex-row items-center bg-[#2B3B3C] rounded-xl border ${
+          isFocused ? "border-chartreuse" : "border-transparent"
+        } h-14 px-4`}
+      >
+        <Ionicons
+          name={icon}
+          size={20}
+          color={isFocused ? "#BBCC13" : "#9CA3AF"}
+        />
+        <TextInput
+          placeholder={placeholder}
+          className={`flex-1 text-white ml-3 font-rregular text-base ${!editable ? "opacity-50" : ""}`}
+          placeholderTextColor="#6B7280"
+          value={value}
+          onChangeText={onChangeText}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
+          editable={editable}
+        />
+      </View>
+    </View>
+  );
+};
 
 const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -22,6 +71,7 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
   const [selectedBankCode, setSelectedBankCode] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
   const [bankAccountName, setBankAccountName] = useState("");
+  const [resolvingAccount, setResolvingAccount] = useState(false);
 
   const { authLoading, setAuthError, register } = useAuth();
 
@@ -31,7 +81,7 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
         const countriesData = await fetchCountries();
         setCountries(countriesData);
       } catch (error) {
-        throw error;
+        // failed silently
       }
     };
 
@@ -39,7 +89,13 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
       try {
         const res = await fetch(`${config.API_BASE_URL}/api/user/banks`);
         const json = await res.json();
-        if (json.success && json.banks) setBanks(json.banks);
+        if (json.success && json.banks) {
+          // sort banks alphabetically
+          const sorted = json.banks.sort((a, b) =>
+            a.name.localeCompare(b.name)
+          );
+          setBanks(sorted);
+        }
       } catch (err) {
         console.warn("Failed to fetch banks:", err);
       }
@@ -48,6 +104,34 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
     getCountries();
     getBanks();
   }, []);
+
+  // Bank Account Resolution
+  useEffect(() => {
+    const resolve = async () => {
+      if (bankAccountNumber.length === 10 && selectedBankCode) {
+        setResolvingAccount(true);
+        try {
+          const res = await fetch(
+            `${config.API_BASE_URL}/api/user/resolve-account?account_number=${bankAccountNumber}&bank_code=${selectedBankCode}`
+          );
+          const json = await res.json();
+          if (json.account_name) {
+            setBankAccountName(json.account_name);
+          } else {
+            setBankAccountName("");
+            // Optional: Alert.alert("Error", "Could not resolve account");
+          }
+        } catch (e) {
+          console.log(e);
+        } finally {
+          setResolvingAccount(false);
+        }
+      } else if (bankAccountNumber.length !== 10) {
+        setBankAccountName("");
+      }
+    };
+    resolve();
+  }, [bankAccountNumber, selectedBankCode]);
 
   const validateEmail = (email) => {
     const emailRegex = /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/g;
@@ -59,29 +143,36 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
       if (
         agentDetails.lastName === "" ||
         agentDetails.firstName === "" ||
-        agentDetails.brandName === ""
+        agentDetails.companyName === ""
       ) {
         return setAuthError("Input fields must not be empty");
       }
-
-      setCurrentStep((prevStep) => Math.min(prevStep + 1, 4));
     } else if (currentStep === 2) {
       if (
         agentDetails.currentAddress === "" ||
-        agentDetails.country === "" ||
+        !agentDetails.country ||
         agentDetails.mobileNumber === ""
       ) {
         return setAuthError("Input fields must not be empty");
       }
-
-      setCurrentStep((prevStep) => Math.min(prevStep + 1, 4));
-    } else {
-      // if at step 3 and moving to step 4
-      setCurrentStep((prevStep) => Math.min(prevStep + 1, 4));
+    } else if (currentStep === 3) {
+      if (agentDetails.email === "" || agentDetails.password === "") {
+        return setAuthError("Input fields must not be empty");
+      }
+      if (!validateEmail(agentDetails.email)) {
+        return setAuthError("Enter a valid email");
+      }
+      if (agentDetails.password.length < 8) {
+        return setAuthError("Password must be at least 8 characters");
+      }
     }
+
+    setAuthError(""); // clear errors
+    setCurrentStep((prevStep) => Math.min(prevStep + 1, 4));
   };
 
   const prevStep = () => {
+    setAuthError("");
     setCurrentStep((prevStep) => Math.max(prevStep - 1, 1));
   };
 
@@ -94,26 +185,12 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
       : "";
     setAgentDetails({
       ...agentDetails,
-      country: countryDetails.name.common,
+      country: countryDetails?.name.common,
       countryCode,
     });
   };
 
   const handleSignup = async () => {
-    if (agentDetails.email === "" || agentDetails.password === "") {
-      return setAuthError("Input fields must not be empty");
-    }
-
-    if (!validateEmail(agentDetails.email)) {
-      return setAuthError("Enter a valid email");
-    }
-
-    if (agentDetails.password.length < 8) {
-      return setAuthError(
-        "Password length must be equal to or greater than 8 characters",
-      );
-    }
-
     if (
       !emergencyContact.name ||
       !emergencyContact.relationship ||
@@ -121,8 +198,12 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
       !emergencyContact.email
     ) {
       return setAuthError(
-        "Emergency contact must include name, relationship, phone and email",
+        "Emergency contact must include name, relationship, phone and email"
       );
+    }
+
+    if (!selectedBankCode || !bankAccountNumber || !bankAccountName) {
+      return setAuthError("Please provide valid bank details");
     }
 
     const fullMobileNumber = `${agentDetails.countryCode}${agentDetails.mobileNumber}`;
@@ -142,32 +223,37 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
 
   return (
     <View className="mb-6">
+      {/* Step Indicator */}
+      <View className="flex-row justify-between mb-6 px-1">
+        {[1, 2, 3, 4].map((step) => (
+          <View
+            key={step}
+            className={`h-1 flex-1 rounded-full mx-1 ${step <= currentStep ? "bg-chartreuse" : "bg-[#2B3B3C]"}`}
+          />
+        ))}
+      </View>
+
       {currentStep === 1 && (
         <View>
-          <TextInput
+          <InputField
+            icon="person-outline"
             placeholder="Last Name"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
             value={agentDetails.lastName}
             onChangeText={(text) =>
               setAgentDetails({ ...agentDetails, lastName: text })
             }
           />
-
-          <TextInput
+          <InputField
+            icon="person-outline"
             placeholder="First Name"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
             value={agentDetails.firstName}
             onChangeText={(text) =>
               setAgentDetails({ ...agentDetails, firstName: text })
             }
           />
-
-          <TextInput
+          <InputField
+            icon="briefcase-outline"
             placeholder="Brand Name"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
             value={agentDetails.companyName}
             onChangeText={(text) =>
               setAgentDetails({ ...agentDetails, companyName: text })
@@ -176,10 +262,10 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
 
           <TouchableOpacity
             onPress={nextStep}
-            className="bg-chartreuse p-3 rounded-lg mt-4"
+            className="bg-chartreuse p-4 rounded-xl mt-2"
           >
-            <Text className="text-center text-frenchGray-dark font-rbold">
-              Next
+            <Text className="text-center text-[#212A2B] font-rbold text-lg">
+              Next Step
             </Text>
           </TouchableOpacity>
         </View>
@@ -187,212 +273,257 @@ const AgentSignupForm = ({ agentDetails, setAgentDetails }) => {
 
       {currentStep === 2 && (
         <>
-          <TextInput
+          <InputField
+            icon="location-outline"
             placeholder="Current Address"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
             value={agentDetails.currentAddress}
             onChangeText={(text) =>
               setAgentDetails({ ...agentDetails, currentAddress: text })
             }
           />
 
-          <View className="bg-frenchGray-light mb-4 rounded-lg w-full font-regular">
-              <Picker
-                selectedValue={selectedCountry}
-                onValueChange={(itemValue) => handleCountryChange(itemValue)}
-                style={{ color: "#FFFFFF" }}
-                dropdownIconColor={"#9CA3AF"}
-                selectionColor={"#FFFFFF"}
-              >
-              <Picker.Item key="select" label="Select country" value="" />
+          <View className="mb-4 bg-[#2B3B3C] rounded-xl border border-transparent h-14 justify-center">
+            <Picker
+              selectedValue={selectedCountry}
+              onValueChange={(itemValue) => handleCountryChange(itemValue)}
+              style={{ color: "#FFFFFF" }}
+              dropdownIconColor={"#9CA3AF"}
+            >
+              <Picker.Item
+                key="select"
+                label="Select Country"
+                value=""
+                color="#9CA3AF"
+              />
               {countries.map((country) => (
                 <Picker.Item
                   key={country?.name.common}
                   label={country?.name.common}
                   value={country?.name.common}
+                  color="#000000"
                 />
               ))}
             </Picker>
           </View>
 
           <View className="flex-row items-center mb-4">
-            <View className="bg-frenchGray-light text-white p-2 py-[14px] rounded-lg">
-              <Text className="text-white">{`${agentDetails.countryCode}`}</Text>
+            <View className="bg-[#2B3B3C] h-14 px-4 justify-center rounded-xl mr-2">
+              <Text className="text-white font-rmedium">
+                {agentDetails.countryCode || "+00"}
+              </Text>
             </View>
-            <TextInput
-              placeholder="Mobile Number"
-              className="bg-frenchGray-light text-white p-2 ml-2 rounded-lg flex-1 font-regular"
-              placeholderTextColor="#9CA3AF"
-              value={agentDetails.mobileNumber}
-              onChangeText={(text) =>
-                setAgentDetails({ ...agentDetails, mobileNumber: text })
-              }
-            />
+            <View className="flex-1">
+              <View className="flex-row items-center bg-[#2B3B3C] rounded-xl h-14 px-4">
+                <Ionicons name="call-outline" size={20} color="#9CA3AF" />
+                <TextInput
+                  placeholder="Mobile Number"
+                  className="flex-1 text-white ml-3 font-rregular text-base"
+                  placeholderTextColor="#6B7280"
+                  value={agentDetails.mobileNumber}
+                  onChangeText={(text) =>
+                    setAgentDetails({ ...agentDetails, mobileNumber: text })
+                  }
+                  keyboardType="phone-pad"
+                />
+              </View>
+            </View>
           </View>
 
-          <TouchableOpacity
-            onPress={prevStep}
-            className="bg-frenchGray-dark p-3 rounded-lg mt-4"
-          >
-            <Text className="text-center text-white font-rbold">Back</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={nextStep}
-            className="bg-chartreuse p-3 rounded-lg mt-4"
-          >
-            <Text className="text-center text-frenchGray-dark font-rbold">
-              Next
-            </Text>
-          </TouchableOpacity>
+          <View className="flex-row gap-3 mt-2">
+            <TouchableOpacity
+              onPress={prevStep}
+              className="flex-1 bg-[#3D454B] p-4 rounded-xl"
+            >
+              <Text className="text-center text-white font-rbold text-lg">
+                Back
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={nextStep}
+              className="flex-1 bg-chartreuse p-4 rounded-xl"
+            >
+              <Text className="text-center text-[#212A2B] font-rbold text-lg">
+                Next
+              </Text>
+            </TouchableOpacity>
+          </View>
         </>
       )}
 
       {currentStep === 3 && (
         <>
-          <TextInput
-            placeholder="Email"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
+          <InputField
+            icon="mail-outline"
+            placeholder="Email Address"
             value={agentDetails.email}
             onChangeText={(text) =>
               setAgentDetails({ ...agentDetails, email: text })
             }
+            keyboardType="email-address"
+            autoCapitalize="none"
           />
 
-          <View className="relative w-full">
-            <TextInput
-              placeholder="Password"
-              secureTextEntry={!showPassword}
-              className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-              placeholderTextColor="#9CA3AF"
-              value={agentDetails.password}
-              onChangeText={(text) =>
-                setAgentDetails({ ...agentDetails, password: text })
-              }
-            />
-            <TouchableOpacity
-              className="absolute top-[10px] right-[8px]"
-              onPress={() => setShowPassword((prev) => !prev)}
-            >
-              <Ionicons
-                name={showPassword ? "eye-outline" : "eye-off-outline"}
-                size={20}
-                color={"#9CA3AF"}
+          <View className="mb-4">
+            <View className="flex-row items-center bg-[#2B3B3C] rounded-xl h-14 px-4">
+              <Ionicons name="lock-closed-outline" size={20} color="#9CA3AF" />
+              <TextInput
+                placeholder="Password"
+                secureTextEntry={!showPassword}
+                className="flex-1 text-white ml-3 font-rregular text-base"
+                placeholderTextColor="#6B7280"
+                value={agentDetails.password}
+                onChangeText={(text) =>
+                  setAgentDetails({ ...agentDetails, password: text })
+                }
               />
-            </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowPassword((prev) => !prev)}
+              >
+                <Ionicons
+                  name={showPassword ? "eye-outline" : "eye-off-outline"}
+                  size={20}
+                  color="#9CA3AF"
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <TouchableOpacity
-            onPress={prevStep}
-            className="bg-frenchGray-dark p-3 rounded-lg mt-4"
-          >
-            <Text className="text-center text-white font-rbold">Back</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={nextStep}
-            className="bg-chartreuse p-3 rounded-lg mt-4"
-          >
-            <Text className="text-center text-frenchGray-dark font-rbold">
-              Next
-            </Text>
-          </TouchableOpacity>
+          <View className="flex-row gap-3 mt-2">
+            <TouchableOpacity
+              onPress={prevStep}
+              className="flex-1 bg-[#3D454B] p-4 rounded-xl"
+            >
+              <Text className="text-center text-white font-rbold text-lg">
+                Back
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={nextStep}
+              className="flex-1 bg-chartreuse p-4 rounded-xl"
+            >
+              <Text className="text-center text-[#212A2B] font-rbold text-lg">
+                Next
+              </Text>
+            </TouchableOpacity>
+          </View>
         </>
       )}
 
       {currentStep === 4 && (
         <>
-          <TextInput
-            placeholder="Emergency contact name"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
+          <Text className="text-gray-300 text-sm mb-2 font-rmedium">
+            Emergency Contact
+          </Text>
+          <InputField
+            icon="person-outline"
+            placeholder="Contact Name"
             value={emergencyContact.name}
             onChangeText={(text) =>
               setEmergencyContact({ ...emergencyContact, name: text })
             }
           />
-
-          <TextInput
+          <InputField
+            icon="people-outline"
             placeholder="Relationship"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
             value={emergencyContact.relationship}
             onChangeText={(text) =>
               setEmergencyContact({ ...emergencyContact, relationship: text })
             }
           />
-
-          <TextInput
-            placeholder="Emergency contact phone"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="phone-pad"
+          <InputField
+            icon="call-outline"
+            placeholder="Contact Phone"
             value={emergencyContact.phone}
             onChangeText={(text) =>
               setEmergencyContact({ ...emergencyContact, phone: text })
             }
+            keyboardType="phone-pad"
           />
-
-          <TextInput
-            placeholder="Emergency contact email"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font-rregular"
-            placeholderTextColor="#9CA3AF"
+          <InputField
+            icon="mail-outline"
+            placeholder="Contact Email"
             value={emergencyContact.email}
             onChangeText={(text) =>
               setEmergencyContact({ ...emergencyContact, email: text })
             }
+            keyboardType="email-address"
           />
 
-          {/* Bank details */}
-          <View className="bg-frenchGray-light mb-4 rounded-lg w-full font-regular">
+          <View className="border-t border-gray-700 my-4" />
+          <Text className="text-gray-300 text-sm mb-2 font-rmedium">
+            Bank Details (For Payouts)
+          </Text>
+
+          <View className="mb-4 bg-[#2B3B3C] rounded-xl border border-transparent h-14 justify-center">
             <Picker
               selectedValue={selectedBankCode}
               onValueChange={(itemValue) => setSelectedBankCode(itemValue)}
               style={{ color: "#FFFFFF" }}
               dropdownIconColor={"#9CA3AF"}
-              selectionColor={"#FFFFFF"}
             >
-              <Picker.Item key="select" label="Select bank" value="" />
+              <Picker.Item
+                key="select"
+                label="Select Bank"
+                value=""
+                color="#9CA3AF"
+              />
               {banks.map((bank) => (
-                <Picker.Item key={bank.code} label={bank.name} value={bank.code} />
+                <Picker.Item
+                  key={bank.code}
+                  label={bank.name}
+                  value={bank.code}
+                  color="#000000"
+                />
               ))}
             </Picker>
           </View>
 
-          <TextInput
-            placeholder="Account name"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font_rregular"
-            placeholderTextColor="#9CA3AF"
-            value={bankAccountName}
-            onChangeText={(text) => setBankAccountName(text)}
-          />
-
-          <TextInput
-            placeholder="Account number"
-            className="bg-frenchGray-light text-white p-2 mb-4 rounded-lg w-full font_rregular"
-            placeholderTextColor="#9CA3AF"
-            keyboardType="numeric"
+          <InputField
+            icon="card-outline"
+            placeholder="Account Number"
             value={bankAccountNumber}
             onChangeText={(text) => setBankAccountNumber(text)}
+            keyboardType="numeric"
           />
 
-          <TouchableOpacity
-            onPress={prevStep}
-            className="bg-frenchGray-dark p-3 rounded-lg mt-4"
-          >
-            <Text className="text-center text-white font-rbold">Back</Text>
-          </TouchableOpacity>
+          {resolvingAccount ? (
+            <View className="mb-4 flex-row items-center">
+              <ActivityIndicator size="small" color="#BBCC13" />
+              <Text className="text-gray-400 ml-2">Verifying account...</Text>
+            </View>
+          ) : (
+            <InputField
+              icon="person-circle-outline"
+              placeholder="Account Name (Auto-filled)" // Will be auto-filled
+              value={bankAccountName}
+              onChangeText={setBankAccountName}
+              editable={false} // Read-only ideally, but let's keep it editable if user insists? User requested automated, so disabled is better UX for "verified".
+            />
+          )}
 
-          <TouchableOpacity
-            className="bg-chartreuse p-3 rounded-lg mt-4"
-            onPress={handleSignup}
-          >
-            <Text className="text-center text-white">
-              {authLoading ? "Loading..." : "Signup"}
-            </Text>
-          </TouchableOpacity>
+          <View className="flex-row gap-3 mt-2">
+            <TouchableOpacity
+              onPress={prevStep}
+              className="flex-1 bg-[#3D454B] p-4 rounded-xl"
+            >
+              <Text className="text-center text-white font-rbold text-lg">
+                Back
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              className="flex-1 bg-chartreuse p-4 rounded-xl flex-row justify-center items-center"
+              onPress={handleSignup}
+              disabled={authLoading}
+            >
+              {authLoading ? (
+                <ActivityIndicator color="#212A2B" />
+              ) : (
+                <Text className="text-center text-[#212A2B] font-rbold text-lg">
+                  Submit
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </>
       )}
     </View>
